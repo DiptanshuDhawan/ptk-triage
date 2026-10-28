@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sV -sC -oX sample_nmap.xml 10.10.10.5" start="1700000000" version="7.94">
+  <host starttime="1700000000" endtime="1700000100">
+    <status state="up" reason="echo-reply"/>
+    <address addr="10.10.10.5" addrtype="ipv4"/>
+    <hostnames>
+      <hostname name="dc01.target.local" type="user"/>
+    </hostnames>
+    <ports>
+      <port protocol="tcp" portid="22">
+        <state state="open" reason="syn-ack"/>
+        <service name="ssh" product="OpenSSH" version="7.2p2 Ubuntu 4ubuntu2.8" extrainfo="Ubuntu Linux; protocol 2.0" method="probed" conf="10"/>
+      </port>
+      <port protocol="tcp" portid="88">
+        <state state="open" reason="syn-ack"/>
+        <service name="kerberos-sec" product="Microsoft Windows Kerberos" method="probed" conf="10"/>
+      </port>
+      <port protocol="tcp" portid="135">
+        <state state="open" reason="syn-ack"/>
+        <service name="msrpc" product="Microsoft Windows RPC" method="probed" conf="10"/>
+      </port>
+      <port protocol="tcp" portid="389">
+        <state state="open" reason="syn-ack"/>
+        <service name="ldap" product="Microsoft Windows Active Directory LDAP" method="probed" conf="10"/>
+      </port>
+      <port protocol="tcp" portid="445">
+        <state state="open" reason="syn-ack"/>
+        <service name="microsoft-ds" method="probed" conf="10"/>
+        <script id="smb-security-mode" output="&#xa;  account_used: guest&#xa;  authentication_level: user&#xa;  message_signing: disabled (dangerous, but default)"/>
+        <script id="smb2-security-mode" output="  message_signing: disabled"/>
+      </port>
+      <port protocol="tcp" portid="3306">
+        <state state="open" reason="syn-ack"/>
+        <service name="mysql" product="MySQL" version="5.5.62" method="probed" conf="10"/>
+      </port>
+      <port protocol="tcp" portid="3389">
+        <state state="open" reason="syn-ack"/>
+        <service name="ms-wbt-server" method="probed" conf="10"/>
+      </port>
+      <port protocol="tcp" portid="5985">
+        <state state="open" reason="syn-ack"/>
+        <service name="http" product="Microsoft HTTPAPI httpd" version="2.0" extrainfo="SSDP/UPnP" method="probed" conf="10"/>
+      </port>
+      <port protocol="tcp" portid="8080">
+        <state state="open" reason="syn-ack"/>
+        <service name="http" product="Apache Tomcat" version="8.5.14" method="probed" conf="10"/>
+      </port>
+      <port protocol="tcp" portid="8443">
+        <state state="open" reason="syn-ack"/>
+        <service name="https" method="table" conf="3"/>
+      </port>
+      <port protocol="tcp" portid="2222">
+        <state state="open" reason="syn-ack"/>
+        <service name="ssh" product="OpenSSH" version="8.9p1" method="probed" conf="10"/>
+      </port>
+      <port protocol="tcp" portid="9999">
+        <state state="open" reason="syn-ack"/>
+        <service name="tcpwrapped" method="table" conf="3"/>
+      </port>
+    </ports>
+  </host>
+</nmaprun>

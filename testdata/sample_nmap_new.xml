@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sV -sC -oX sample_nmap_new.xml 10.10.10.5" start="1700100000" version="7.94">
+  <host starttime="1700100000" endtime="1700100100">
+    <status state="up" reason="echo-reply"/>
+    <address addr="10.10.10.5" addrtype="ipv4"/>
+    <hostnames>
+      <hostname name="dc01.target.local" type="user"/>
+    </hostnames>
+    <ports>
+      <port protocol="tcp" portid="22">
+        <state state="open" reason="syn-ack"/>
+        <service name="ssh" product="OpenSSH" version="9.6p1 Ubuntu" extrainfo="Ubuntu Linux; protocol 2.0" method="probed" conf="10"/>
+      </port>
+      <port protocol="tcp" portid="445">
+        <state state="open" reason="syn-ack"/>
+        <service name="microsoft-ds" method="probed" conf="10"/>
+      </port>
+      <port protocol="tcp" portid="1433">
+        <state state="open" reason="syn-ack"/>
+        <service name="ms-sql-s" product="Microsoft SQL Server" version="2019" method="probed" conf="10"/>
+      </port>
+      <port protocol="tcp" portid="8080">
+        <state state="open" reason="syn-ack"/>
+        <service name="http" product="Apache Tomcat" version="8.5.14" method="probed" conf="10"/>
+      </port>
+    </ports>
+  </host>
+</nmaprun>

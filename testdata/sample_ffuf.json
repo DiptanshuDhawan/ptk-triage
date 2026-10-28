@@ -1,0 +1,28 @@
+{
+  "commandline": "ffuf -w wordlist.txt -u http://target.com/FUZZ -o sample_ffuf.json -of json",
+  "time": "2024-01-01T00:00:00Z",
+  "results": [
+    {"input": {"FUZZ": "index.html"}, "position": 1, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/index.html", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "about"}, "position": 2, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/about", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "contact"}, "position": 3, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/contact", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "home"}, "position": 4, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/home", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "news"}, "position": 5, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/news", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "products"}, "position": 6, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/products", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "services"}, "position": 7, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/services", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "team"}, "position": 8, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/team", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "blog"}, "position": 9, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/blog", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "faq"}, "position": 10, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/faq", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "login"}, "position": 11, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/login", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "search"}, "position": 12, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/search", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "help"}, "position": 13, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/help", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "support"}, "position": 14, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/support", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "privacy"}, "position": 15, "status": 200, "length": 1256, "words": 120, "lines": 40, "content-type": "text/html", "url": "http://target.com/privacy", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "admin"}, "position": 16, "status": 403, "length": 289, "words": 20, "lines": 10, "content-type": "text/html", "url": "http://target.com/admin", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": ".git/config"}, "position": 17, "status": 200, "length": 92, "words": 12, "lines": 5, "content-type": "text/plain", "url": "http://target.com/.git/config", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": ".env"}, "position": 18, "status": 200, "length": 431, "words": 30, "lines": 18, "content-type": "text/plain", "url": "http://target.com/.env", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "backup.zip"}, "position": 19, "status": 200, "length": 204852, "words": 900, "lines": 300, "content-type": "application/zip", "url": "http://target.com/backup.zip", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "api"}, "position": 20, "status": 500, "length": 617, "words": 55, "lines": 22, "content-type": "application/json", "url": "http://target.com/api", "redirectlocation": "", "host": "target.com"},
+    {"input": {"FUZZ": "dashboard"}, "position": 21, "status": 302, "length": 0, "words": 1, "lines": 1, "content-type": "text/html", "url": "http://target.com/dashboard", "redirectlocation": "/login", "host": "target.com"},
+    {"input": {"FUZZ": "actuator"}, "position": 22, "status": 200, "length": 1843, "words": 60, "lines": 25, "content-type": "application/json", "url": "http://target.com/actuator", "redirectlocation": "", "host": "target.com"}
+  ]
+}

@@ -1,0 +1,489 @@
+# ============================================================================
+#  ptk triage — default ruleset
+# ----------------------------------------------------------------------------
+#  This file defines what gets flagged and why. It ships embedded in the binary
+#  so the tool works out of the box. To customize:
+#
+#     ptk triage rules --dump > rules.yaml      # write this file out
+#     # edit rules.yaml ...
+#     ptk triage nmap scan.xml --rules rules.yaml
+#
+#  Two kinds of rules:
+#    patterns  - regex matched (case-insensitive) against one Item field
+#    builtins  - computed logic that regex can't express, toggled here
+#
+#  Pattern rule fields:
+#    id        - short identifier shown in --json and used by combo logic
+#    field     - one of: service product version banner scripts path url name cname redirect
+#    pattern   - RE2 regex (Go). Anchors ^$ and \b work. Already case-insensitive.
+#    severity  - HIGH | MED | LOW | INFO
+#    reason    - one-line human explanation. {match} and {target} are expanded.
+#    kinds     - (optional) restrict to: host path sub
+#    ports     - (optional, host only) only apply on these ports
+#
+#  Philosophy: never flag without explaining WHY it matters. Severities mean:
+#    HIGH  - actionable now: real finding or very likely foothold
+#    MED   - worth looking at this scan: probable value, needs a human
+#    LOW   - note it: enumerate / check CVEs when you get to it
+#    INFO  - context only
+# ============================================================================
+
+patterns:
+
+  # --------------------------------------------------------------------------
+  # nmap: high-value services (AD / Windows / common entry points)
+  # These are the services that most often lead somewhere on an engagement.
+  # --------------------------------------------------------------------------
+
+  - id: smb
+    field: service
+    pattern: '^(microsoft-ds|netbios-ssn|smb)$'
+    severity: HIGH
+    reason: "SMB exposed — enumerate shares, check null/anonymous session, signing, and known RCE (MS17-010 etc.)"
+    kinds: [host]
+
+  - id: rdp
+    field: service
+    pattern: '^(ms-wbt-server|rdp)$'
+    severity: HIGH
+    reason: "RDP exposed — check NLA, BlueKeep (CVE-2019-0708) era builds, and credential reuse"
+    kinds: [host]
+
+  - id: winrm
+    field: service
+    pattern: 'wsman|winrm'
+    severity: HIGH
+    reason: "WinRM exposed — remote PowerShell foothold if creds are obtained (evil-winrm)"
+    kinds: [host]
+  - id: winrm-port
+    field: service
+    pattern: '.'
+    ports: [5985, 5986]
+    severity: HIGH
+    reason: "WinRM port open — remote PowerShell management interface; prime target with valid creds"
+    kinds: [host]
+
+  - id: kerberos
+    field: service
+    pattern: 'kerberos|kpasswd'
+    severity: HIGH
+    reason: "Kerberos present — Domain Controller likely; try AS-REP roasting and user enumeration"
+    kinds: [host]
+
+  - id: ldap
+    field: service
+    pattern: '^ldap(ssl|s)?$|ldap'
+    severity: HIGH
+    reason: "LDAP exposed — enumerate the directory (anonymous bind?), extract users/groups/policy"
+    kinds: [host]
+
+  - id: msrpc
+    field: service
+    pattern: 'msrpc|epmap'
+    severity: MED
+    reason: "MSRPC endpoint mapper — enumerate interfaces (rpcdump), potential for null-session recon"
+    kinds: [host]
+
+  - id: smtp
+    field: service
+    pattern: '^smtp$'
+    severity: LOW
+    reason: "SMTP — try VRFY/EXPN/RCPT user enumeration and open-relay checks"
+    kinds: [host]
+
+  - id: snmp
+    field: service
+    pattern: '^snmp$'
+    severity: MED
+    reason: "SNMP exposed — try default community strings (public/private); can leak system/network data"
+    kinds: [host]
+
+  - id: nfs
+    field: service
+    pattern: 'nfs|rpcbind|mountd'
+    severity: MED
+    reason: "NFS/portmapper — list exports (showmount -e); world-readable mounts are common"
+    kinds: [host]
+
+  - id: ftp
+    field: service
+    pattern: '^ftp$'
+    severity: MED
+    reason: "FTP — check anonymous login and writable directories"
+    kinds: [host]
+
+  - id: telnet
+    field: service
+    pattern: '^telnet$'
+    severity: MED
+    reason: "Telnet — cleartext admin protocol; legacy device, try default creds"
+    kinds: [host]
+
+  - id: vnc
+    field: service
+    pattern: '^vnc'
+    severity: MED
+    reason: "VNC — remote desktop; check for no-auth/weak password and known RealVNC/UltraVNC CVEs"
+    kinds: [host]
+
+  # Databases — frequently reachable and under-hardened.
+  - id: db-mysql
+    field: service
+    pattern: 'mysql|mariadb'
+    severity: MED
+    reason: "MySQL/MariaDB exposed — try default/blank root creds and over-permissive grants"
+    kinds: [host]
+  - id: db-mssql
+    field: service
+    pattern: 'ms-sql|mssql'
+    severity: HIGH
+    reason: "MSSQL exposed — xp_cmdshell / linked-server abuse and AD creds reuse are common footholds"
+    kinds: [host]
+  - id: db-postgres
+    field: service
+    pattern: 'postgres'
+    severity: MED
+    reason: "PostgreSQL exposed — try default creds; COPY ... PROGRAM can yield RCE if superuser"
+    kinds: [host]
+  - id: db-mongo
+    field: service
+    pattern: 'mongod?b?'
+    ports: [27017, 27018]
+    severity: HIGH
+    reason: "MongoDB exposed — historically unauthenticated by default; check for open access to all collections"
+    kinds: [host]
+  - id: db-redis
+    field: service
+    pattern: 'redis'
+    severity: HIGH
+    reason: "Redis exposed — unauthenticated by default; known RCE via module load / cron / SSH key write"
+    kinds: [host]
+  - id: db-elastic
+    field: service
+    pattern: 'elasticsearch'
+    ports: [9200, 9300]
+    severity: HIGH
+    reason: "Elasticsearch exposed — often unauthenticated; may expose entire indexed dataset"
+    kinds: [host]
+  - id: db-memcached
+    field: service
+    pattern: 'memcache'
+    severity: MED
+    reason: "Memcached exposed — unauthenticated; can leak cached data and be abused for amplification"
+    kinds: [host]
+
+  # App servers / dev infra with a rich exploitation history.
+  - id: jenkins
+    field: banner
+    pattern: 'jenkins'
+    severity: HIGH
+    reason: "Jenkins detected — script console = RCE if accessible; check for anon access and old CVEs"
+    kinds: [host]
+  - id: tomcat
+    field: banner
+    pattern: 'tomcat|coyote'
+    severity: HIGH
+    reason: "Apache Tomcat — try /manager with default creds (tomcat/tomcat) for WAR-upload RCE; check Ghostcat (CVE-2020-1938)"
+    kinds: [host]
+  - id: jboss
+    field: banner
+    pattern: 'jboss|wildfly'
+    severity: HIGH
+    reason: "JBoss/WildFly — JMX/invoker deserialization and admin console RCE paths are well known"
+    kinds: [host]
+  - id: weblogic
+    field: banner
+    pattern: 'weblogic'
+    severity: HIGH
+    reason: "Oracle WebLogic — long history of unauthenticated deserialization RCE; check version against CVEs"
+    kinds: [host]
+  - id: rmi
+    field: service
+    pattern: 'java-rmi|rmiregistry'
+    severity: MED
+    reason: "Java RMI — deserialization attack surface (ysoserial); enumerate exposed objects"
+    kinds: [host]
+  - id: docker-api
+    field: service
+    pattern: '.'
+    ports: [2375, 2376]
+    severity: HIGH
+    reason: "Docker API port open — if unauthenticated, trivial container escape to host RCE"
+    kinds: [host]
+  - id: k8s-api
+    field: service
+    pattern: '.'
+    ports: [6443, 10250]
+    severity: HIGH
+    reason: "Kubernetes API/kubelet port — check for anonymous access; kubelet 10250 can expose exec"
+    kinds: [host]
+  - id: rsync
+    field: service
+    pattern: '^rsync$'
+    severity: MED
+    reason: "rsync daemon — list modules; often world-readable/writable without auth"
+    kinds: [host]
+
+  # --------------------------------------------------------------------------
+  # nmap: outdated / aged version banners (manual CVE research flags)
+  # We do NOT try to be a CVE database. These just say "this looks old enough
+  # to be worth a lookup".
+  # --------------------------------------------------------------------------
+
+  - id: old-version
+    field: banner
+    pattern: '\b([0-5])\.[0-9]+\.[0-9]+'
+    severity: LOW
+    reason: "Service reports an old-looking version ({match}) — check for known CVEs for this build"
+    kinds: [host]
+    # NOTE: matches a dotted x.y.z build starting 0-5. Requiring a third
+    # component avoids false positives on protocol-style "1.0"/"2.0" banners
+    # (e.g. Microsoft HTTPAPI 2.0, RPC over HTTP 1.0) which are not versions.
+
+  - id: outdated-openssh
+    field: banner
+    pattern: 'OpenSSH[ _](?:[1-6]\.|7\.[0-5])'
+    severity: LOW
+    reason: "Older OpenSSH ({match}) — enumerate users (pre-7.7 CVE-2018-15473) and check version CVEs"
+    kinds: [host]
+
+  - id: outdated-apache
+    field: banner
+    pattern: 'Apache/2\.(?:0|2)\.'
+    severity: LOW
+    reason: "Legacy Apache httpd ({match}) — likely EOL; review version-specific CVEs"
+    kinds: [host]
+
+  - id: outdated-iis
+    field: banner
+    pattern: 'IIS/(?:[1-6])\.'
+    severity: LOW
+    reason: "Old IIS ({match}) — legacy Windows server; check platform-specific CVEs and WebDAV"
+    kinds: [host]
+
+  - id: outdated-php
+    field: banner
+    pattern: 'PHP/(?:[1-5]\.|7\.[0-3])'
+    severity: LOW
+    reason: "Old PHP ({match}) — EOL branch; check for version CVEs and insecure defaults"
+    kinds: [host]
+
+  - id: vsftpd-backdoor
+    field: banner
+    pattern: 'vsftpd 2\.3\.4'
+    severity: HIGH
+    reason: "vsftpd 2.3.4 — the backdoored release; smiley-face command injection RCE"
+    kinds: [host]
+
+  # --------------------------------------------------------------------------
+  # nmap: NSE script output already telling us something
+  # --------------------------------------------------------------------------
+
+  - id: nse-anonymous
+    field: scripts
+    pattern: 'anonymous|null session|guest'
+    severity: HIGH
+    reason: "NSE output indicates anonymous/null/guest access — likely an open door, verify immediately"
+    kinds: [host]
+  - id: nse-default-creds
+    field: scripts
+    pattern: 'default (?:credential|password|account)|admin:admin|login succeeded'
+    severity: HIGH
+    reason: "NSE output suggests default/weak credentials accepted — verify and use"
+    kinds: [host]
+  - id: nse-vuln
+    field: scripts
+    pattern: '\bVULNERABLE\b|State: VULNERABLE|CVE-\d{4}-\d+'
+    severity: HIGH
+    reason: "NSE vuln script flagged a vulnerability ({match}) — confirm and exploit path"
+    kinds: [host]
+  - id: nse-smb-signing
+    field: scripts
+    pattern: 'message_signing: disabled|signing (?:is )?(?:not required|disabled)|enabled but not required|not required'
+    severity: MED
+    reason: "SMB signing not required — enables NTLM relay attacks"
+    kinds: [host]
+  - id: nse-smb-os
+    field: scripts
+    pattern: 'smb-os-discovery|OS: Windows|Domain name:|FQDN:'
+    severity: INFO
+    reason: "SMB OS discovery leaked host/domain details ({match}) — note domain, build, and hostname for AD attacks"
+    kinds: [host]
+  - id: nse-ssl-weak
+    field: scripts
+    pattern: 'SSLv3|SSLv2|POODLE|Heartbleed|CVE-2014-0160'
+    severity: MED
+    reason: "Weak/legacy TLS flagged by NSE ({match}) — crypto weakness, possibly data exposure"
+    kinds: [host]
+  - id: nse-shares
+    field: scripts
+    pattern: 'READ/WRITE|Writeable|writable'
+    severity: HIGH
+    reason: "NSE reports writable access — potential upload/foothold, verify"
+    kinds: [host]
+
+  # --------------------------------------------------------------------------
+  # ffuf: sensitive / high-value path names
+  # Broad default list. Extend freely — one pattern per logical group.
+  # --------------------------------------------------------------------------
+
+  - id: path-vcs
+    field: path
+    pattern: '(^|/)\.(git|svn|hg|bzr)(/|$)'
+    severity: HIGH
+    reason: "Exposed version-control directory — source code / history / secrets likely retrievable"
+    kinds: [path]
+  - id: path-env
+    field: path
+    pattern: '(^|/)\.env|(^|/)\.env\.|/env$|config\.(env|yml|yaml)$'
+    severity: HIGH
+    reason: "Environment/config file exposed — commonly contains DB creds, API keys, secrets"
+    kinds: [path]
+  - id: path-backup
+    field: path
+    pattern: '\.(bak|old|orig|save|swp|backup|tar|tar\.gz|tgz|zip|rar|7z|sql|dump)$|~$|\.(bak|old)\.'
+    severity: HIGH
+    reason: "Backup/archive artifact — source or database dumps are a frequent quick win"
+    kinds: [path]
+  - id: path-secrets
+    field: path
+    pattern: 'id_rsa|id_dsa|\.pem$|\.key$|\.pfx$|\.p12$|credentials|secrets?|\.htpasswd|\.npmrc|\.aws'
+    severity: HIGH
+    reason: "Possible key/credential file — direct secret exposure"
+    kinds: [path]
+  - id: path-config
+    field: path
+    pattern: 'web\.config|\.htaccess|wp-config\.php|configuration\.php|settings\.py|application\.(properties|yml)|appsettings\.json'
+    severity: HIGH
+    reason: "Application config file — may leak secrets, connection strings, internal paths"
+    kinds: [path]
+  - id: path-admin
+    field: path
+    pattern: '(^|/)(admin|administrator|adminer|phpmyadmin|pma|manage(r|ment)?|dashboard|console|cpanel|wp-admin)(/|$)'
+    severity: MED
+    reason: "Admin/management interface — try default creds and known auth bypasses"
+    kinds: [path]
+  - id: path-api
+    field: path
+    pattern: '(^|/)(api|graphql|graphiql|swagger|openapi|api-docs|v[0-9]+)(/|$)|swagger\.json|swagger-ui'
+    severity: MED
+    reason: "API surface / docs — enumerate endpoints; Swagger/GraphQL often over-expose"
+    kinds: [path]
+  - id: path-debug
+    field: path
+    pattern: '(^|/)(debug|_debug|trace|actuator|metrics|phpinfo|server-status|server-info|__debug__|_profiler|telescope)(/|$)|phpinfo\.php'
+    severity: HIGH
+    reason: "Debug/management endpoint — can leak env, heap, config; Spring Actuator can reach RCE"
+    kinds: [path]
+  - id: path-upload
+    field: path
+    pattern: '(^|/)(upload|uploads|files?|import|fileupload)(/|$)'
+    severity: LOW
+    reason: "Upload/file endpoint — test for unrestricted file upload to webshell"
+    kinds: [path]
+  - id: path-shell
+    field: path
+    pattern: '(^|/)(shell|cmd|c99|r57|webshell|b374k)(\.php|\.asp|\.jsp)?(/|$)'
+    severity: HIGH
+    reason: "Possible existing webshell name — confirm; may be prior compromise or planted backdoor"
+    kinds: [path]
+  - id: path-install
+    field: path
+    pattern: '(^|/)(install|setup|installer|migrate|upgrade)(/|$|\.php)'
+    severity: MED
+    reason: "Installer/setup script — if reachable, may allow reconfiguration or re-install takeover"
+    kinds: [path]
+  - id: path-info
+    field: path
+    pattern: '(^|/)(robots\.txt|sitemap\.xml|crossdomain\.xml|\.well-known)(/|$)'
+    severity: INFO
+    reason: "Discovery/metadata file — read for hidden paths and hints"
+    kinds: [path]
+
+  # --------------------------------------------------------------------------
+  # subdomains: naming patterns suggesting sensitive / non-prod environments
+  # --------------------------------------------------------------------------
+
+  - id: sub-nonprod
+    field: name
+    pattern: '(^|[.-])(dev|development|staging|stage|stg|test|testing|qa|uat|sandbox|demo|preview|beta)([.-]|$)'
+    severity: MED
+    reason: "Non-production environment name — typically weaker controls, debug on, stale data"
+    kinds: [sub]
+  - id: sub-internal
+    field: name
+    pattern: '(^|[.-])(internal|intranet|corp|private|local|admin|backend|mgmt|management)([.-]|$)'
+    severity: MED
+    reason: "Internal/management-sounding host exposed externally — may not be meant for the internet"
+    kinds: [sub]
+  - id: sub-access
+    field: name
+    pattern: '(^|[.-])(vpn|citrix|rdp|remote|gateway|gw|portal|owa|webmail|mail|exchange|sso|idp|auth|login)([.-]|$)'
+    severity: MED
+    reason: "Remote-access / auth gateway — high-value target for credential attacks"
+    kinds: [sub]
+  - id: sub-infra
+    field: name
+    pattern: '(^|[.-])(jenkins|gitlab|git|jira|confluence|grafana|kibana|prometheus|nexus|artifactory|sonar|vault|ci|cd|registry)([.-]|$)'
+    severity: MED
+    reason: "DevOps/infra service subdomain — often rich in secrets and lateral-movement value"
+    kinds: [sub]
+  - id: sub-cloud-storage
+    field: cname
+    pattern: 's3\.amazonaws|blob\.core\.windows|storage\.googleapis|azureedge|cloudfront|herokuapp|github\.io|netlify|vercel|azurewebsites|fastly'
+    severity: LOW
+    reason: "Points at third-party cloud/CDN ({match}) — if the backing resource is unclaimed, takeover risk"
+    kinds: [sub]
+
+# ============================================================================
+#  Built-in computed rules — logic regex can't express. Toggle and tune here.
+# ============================================================================
+builtins:
+
+  # ---- ffuf ----------------------------------------------------------------
+  # Flag responses that stand out from the "noise floor" (the single most common
+  # response size). In a wordlist run against a soft-404 app, the real hits are
+  # the ones whose size differs from the thousands of identical responses.
+  size_outlier: true
+  size_outlier_pct: 0.25      # flag when size differs from baseline by >=25%
+  size_outlier_min_set: 15    # need at least this many paths before a baseline is meaningful
+
+  # Treat 401/403/5xx/redirects as interesting (not just 200).
+  interesting_status: true
+
+  # ---- nmap ----------------------------------------------------------------
+  # HTTP(S) seen on a port not in the standard list => worth a manual look.
+  nonstandard_http: true
+  standard_http_ports: [80, 443, 8080, 8443, 8000, 8888]
+
+  # SSH on a non-default port (admins relocate it; still a login surface).
+  nonstandard_ssh: true
+  standard_ssh_ports: [22]
+
+  # nmap guessed the service from the port number instead of probing it.
+  guessed_service: true
+
+  # Open port with no identified service at all.
+  unknown_service: true
+
+  # ---- subdomains ----------------------------------------------------------
+  # CNAME that doesn't resolve => classic subdomain-takeover signal (HIGH).
+  dangling_cname: true
+
+  # Resolves but no web service answered => candidate for a focused port scan.
+  resolved_no_web: true
+
+  # Resolves outside the primary IP range(s) => possibly separate infra/hosting.
+  # Leave primary_cidrs empty to disable range judgement, or set your target's
+  # known ranges to light up the outliers.
+  offrange_ip: true
+  primary_cidrs: []
+  # Example:
+  # primary_cidrs:
+  #   - 10.10.10.0/24
+  #   - 203.0.113.0/24
+
+  # ---- cross-signal confidence (stretch) -----------------------------------
+  # Promote severity by one level when multiple reinforcing signals hit the same
+  # target (e.g. a high-value service rule + an outdated-version rule).
+  combos: true

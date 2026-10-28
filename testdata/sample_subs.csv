@@ -1,0 +1,14 @@
+# subdomain,ip,status  (missing fields tolerated)
+www.target.com,203.0.113.10,200
+dev.target.com,203.0.113.11,200
+staging.target.com,203.0.113.12,403
+api.target.com,203.0.113.10,200
+vpn.target.com,198.51.100.25,200
+internal.target.com,10.0.0.5
+jenkins.target.com,203.0.113.44,200
+test.target.com,203.0.113.11,500
+mail.target.com,203.0.113.10,
+backup.target.com,52.84.12.9
+old.target.com,dangling.s3.amazonaws.com
+assets.target.com,d1234.cloudfront.net
+db.target.com,203.0.113.99
