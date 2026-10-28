@@ -146,6 +146,22 @@ type Finding struct {
 	SevLabel string   `json:"severity"`
 	RuleID   string   `json:"rule"`
 	Reason   string   `json:"reason"`
+	// Tags carries the originating rule's classification (e.g. "service",
+	// "aged") so cross-signal combo logic can reason about *why* a finding
+	// fired without hardcoding specific rule IDs. Builtins set these directly;
+	// pattern rules inherit them from the YAML "tags" field.
+	Tags []string `json:"tags,omitempty"`
+}
+
+// HasTag reports whether the finding carries the given tag (case-sensitive,
+// tags are conventionally lowercase).
+func (f Finding) HasTag(tag string) bool {
+	for _, t := range f.Tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
 }
 
 // SortFindings orders findings by severity (HIGH first), then kind, then target

@@ -39,12 +39,25 @@ func minSeverity() model.Severity {
 
 // reportOptions builds reporter options, auto-disabling color when stdout is
 // not a TTY (so piped/redirected output stays clean) unless JSON is requested.
+// Respects two widely-used environment conventions: NO_COLOR (disables color
+// unconditionally — https://no-color.org) and FORCE_COLOR/CLICOLOR_FORCE
+// (keeps color on even when stdout isn't a TTY, e.g. when piping into
+// `less -R` or capturing output for a report).
 func reportOptions() report.Options {
 	noColor := flagNoColor
-	if !report.ColorEnabled(os.Stdout) {
+	if os.Getenv("NO_COLOR") != "" {
 		noColor = true
+	} else if !report.ColorEnabled(os.Stdout) {
+		if os.Getenv("FORCE_COLOR") == "" && os.Getenv("CLICOLOR_FORCE") == "" {
+			noColor = true
+		}
 	}
-	return report.Options{JSON: flagJSON, Full: flagFull, NoColor: noColor}
+	return report.Options{
+		JSON:    flagJSON,
+		Full:    flagFull,
+		NoColor: noColor,
+		Width:   report.TerminalWidth(os.Stdout),
+	}
 }
 
 // loadRules loads the ruleset and prints any compile warnings to stderr.

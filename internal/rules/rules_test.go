@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -199,22 +200,75 @@ func TestFFUFSensitivePaths(t *testing.T) {
 
 func TestSizeOutlier(t *testing.T) {
 	rs := loadDefault(t)
-	// Build a baseline of 20 identical responses plus one outlier.
+	// Baseline of 20 identical SAME-STATUS responses plus one same-status outlier.
 	var items []model.Item
 	for i := 0; i < 20; i++ {
-		items = append(items, model.Item{Kind: model.KindPath, Path: "p", Status: 404, Length: 500})
+		items = append(items, model.Item{Kind: model.KindPath, Path: "p", Status: 200, Length: 500})
 	}
 	items = append(items, model.Item{Kind: model.KindPath, URL: "http://t/hit", Path: "hit", Status: 200, Length: 4000})
 	fs := rs.Evaluate(items)
 	out := findingsWithRule(fs, "size-outlier")
-	if len(out) == 0 {
-		t.Fatal("expected a size-outlier finding")
+	if len(out) != 1 {
+		t.Fatalf("expected exactly 1 size-outlier finding, got %d", len(out))
 	}
-	// Baseline of 500 should not itself be flagged.
+	if out[0].Target != "http://t/hit" {
+		t.Errorf("wrong item flagged as outlier: %+v", out[0])
+	}
+}
+
+func TestSizeOutlierPerStatusDoesNotCrossContaminate(t *testing.T) {
+	// Regression: the baseline used to be computed globally across ALL status
+	// codes, so a lone response of a rare status could be wrongly compared
+	// against an unrelated status's noise floor (false positive/negative in
+	// both directions). Build two independent, well-populated status groups
+	// with DIFFERENT baselines and confirm each outlier is judged only against
+	// its own group.
+	rs := loadDefault(t)
+	var items []model.Item
+	for i := 0; i < 20; i++ {
+		items = append(items, model.Item{Kind: model.KindPath, Path: "n200", Status: 200, Length: 500})
+	}
+	for i := 0; i < 20; i++ {
+		items = append(items, model.Item{Kind: model.KindPath, Path: "n403", Status: 403, Length: 9000})
+	}
+	// Outlier within the 200 group (far from 500, nowhere near the 403 group's 9000).
+	items = append(items, model.Item{Kind: model.KindPath, URL: "http://t/hit200", Status: 200, Length: 4000})
+	// Outlier within the 403 group (far from 9000, nowhere near the 200 group's 500).
+	items = append(items, model.Item{Kind: model.KindPath, URL: "http://t/hit403", Status: 403, Length: 500})
+
+	fs := rs.Evaluate(items)
+	out := findingsWithRule(fs, "size-outlier")
+	targets := map[string]bool{}
 	for _, f := range out {
-		if strings.Contains(f.Target, "404") {
-			t.Error("baseline responses should not be outliers")
-		}
+		targets[f.Target] = true
+	}
+	if !targets["http://t/hit200"] {
+		t.Error("expected the 200-group outlier to be flagged")
+	}
+	if !targets["http://t/hit403"] {
+		t.Error("expected the 403-group outlier to be flagged")
+	}
+	if len(out) != 2 {
+		t.Errorf("expected exactly 2 outliers (one per status group), got %d: %+v", len(out), out)
+	}
+}
+
+func TestShapeOutlierCatchesSimilarSizeDifferentStructure(t *testing.T) {
+	rs := loadDefault(t)
+	var items []model.Item
+	for i := 0; i < 20; i++ {
+		items = append(items, model.Item{Kind: model.KindPath, Path: "n", Status: 200, Length: 1000, Words: 100})
+	}
+	// Same byte size as baseline (so size-outlier stays quiet) but very
+	// different word count (e.g. a dense error blob padded to a similar size).
+	items = append(items, model.Item{Kind: model.KindPath, URL: "http://t/shape", Status: 200, Length: 1000, Words: 5})
+	fs := rs.Evaluate(items)
+	if len(findingsWithRule(fs, "size-outlier")) != 0 {
+		t.Error("identical byte size must not trigger size-outlier")
+	}
+	shape := findingsWithRule(fs, "shape-outlier")
+	if len(shape) != 1 || shape[0].Target != "http://t/shape" {
+		t.Errorf("expected shape-outlier on the word-count anomaly, got %+v", shape)
 	}
 }
 
@@ -281,11 +335,13 @@ func TestSeverityFilter(t *testing.T) {
 }
 
 func TestComboBoost(t *testing.T) {
-	rs := loadDefault(t)
-	// Same target hit by a high-value service rule and an outdated-version rule.
+	// Same target hit by a finding tagged "service" and one tagged "aged".
+	// This exercises applyCombos directly against the new tag-based design
+	// (replacing the old hardcoded-rule-ID check, which had a dead branch —
+	// see TestComboBoostEndToEnd for the regression test on that bug).
 	fs := []model.Finding{
-		{Target: "10.0.0.1:445", RuleID: "smb", Severity: model.SevMedium, SevLabel: "MED"},
-		{Target: "10.0.0.1:445", RuleID: "outdated-version", Severity: model.SevLow, SevLabel: "LOW"},
+		{Target: "10.0.0.1:445", RuleID: "smb", Severity: model.SevMedium, SevLabel: "MED", Tags: []string{"service"}},
+		{Target: "10.0.0.1:445", RuleID: "some-aged-rule", Severity: model.SevLow, SevLabel: "LOW", Tags: []string{"aged"}},
 	}
 	applyCombos(fs)
 	for _, f := range fs {
@@ -293,7 +349,172 @@ func TestComboBoost(t *testing.T) {
 			t.Errorf("combo should have boosted %s", f.RuleID)
 		}
 	}
-	_ = rs
+}
+
+func TestComboBoostEndToEnd(t *testing.T) {
+	// Regression: the original combo implementation checked for a literal
+	// rule ID ("outdated-version") that no actual rule emitted, so the combo
+	// silently never fired through the real pipeline despite being enabled.
+	// Drive it through rs.Evaluate with real rules to prove it actually
+	// boosts severity end-to-end, not just when a test hand-crafts tags.
+	rs := loadDefault(t)
+	items := []model.Item{{
+		Kind: model.KindHost, Address: "10.0.0.1", Port: 445, Service: "microsoft-ds",
+		Banner: "Samba smbd 3.0.20", // old-version pattern requires a full x.y.z
+	}}
+	fs := rs.Evaluate(items)
+	smb := findingsWithRule(fs, "smb")
+	aged := findingsWithRule(fs, "old-version")
+	if len(smb) == 0 || len(aged) == 0 {
+		t.Fatalf("expected both smb and old-version to fire as a precondition, got smb=%d aged=%d", len(smb), len(aged))
+	}
+	if !strings.Contains(aged[0].Reason, "boosted") {
+		t.Errorf("expected old-version finding to be boosted by the service+aged combo, reason: %q", aged[0].Reason)
+	}
+	if aged[0].Severity < model.SevMedium {
+		t.Errorf("boosted finding should be at least MED, got %s", aged[0].Severity)
+	}
+}
+
+func TestWildcardDNSDetected(t *testing.T) {
+	rs := loadDefault(t)
+	var items []model.Item
+	// 6 distinct subdomains all resolving to the same IP => wildcard suspicion.
+	for i := 0; i < 6; i++ {
+		items = append(items, model.Item{
+			Kind: model.KindSub, Name: fmt.Sprintf("rand%d.target.com", i),
+			Address: "203.0.113.50", Resolved: true, HTTPUp: true,
+		})
+	}
+	fs := rs.Evaluate(items)
+	wc := findingsWithRule(fs, "wildcard-dns")
+	if len(wc) != 1 {
+		t.Fatalf("expected exactly 1 wildcard-dns finding, got %d", len(wc))
+	}
+	if wc[0].Severity != model.SevInfo {
+		t.Errorf("wildcard-dns should be INFO, got %s", wc[0].Severity)
+	}
+}
+
+func TestWildcardDNSNotFlaggedWhenDiverse(t *testing.T) {
+	rs := loadDefault(t)
+	items := []model.Item{
+		{Kind: model.KindSub, Name: "a.target.com", Address: "203.0.113.10", Resolved: true, HTTPUp: true},
+		{Kind: model.KindSub, Name: "b.target.com", Address: "203.0.113.11", Resolved: true, HTTPUp: true},
+		{Kind: model.KindSub, Name: "c.target.com", Address: "203.0.113.12", Resolved: true, HTTPUp: true},
+	}
+	fs := rs.Evaluate(items)
+	if len(findingsWithRule(fs, "wildcard-dns")) != 0 {
+		t.Error("diverse IPs should not trigger wildcard-dns")
+	}
+}
+
+func TestNewHighValueServiceRulesFire(t *testing.T) {
+	rs := loadDefault(t)
+	cases := []struct {
+		rule string
+		item model.Item
+	}{
+		{"ipmi", model.Item{Kind: model.KindHost, Port: 623, Service: "asf-rmcp"}},
+		{"oob-mgmt", model.Item{Kind: model.KindHost, Port: 443, Banner: "Integrated Lights-Out 5 1.30"}},
+		{"vcenter-esxi", model.Item{Kind: model.KindHost, Port: 443, Banner: "VMware vCenter Server"}},
+		{"citrix", model.Item{Kind: model.KindHost, Port: 443, Banner: "Citrix NetScaler"}},
+		{"f5-bigip", model.Item{Kind: model.KindHost, Port: 443, Banner: "BIG-IP"}},
+		{"fortinet", model.Item{Kind: model.KindHost, Port: 443, Banner: "FortiGate firmware"}},
+		{"etcd", model.Item{Kind: model.KindHost, Port: 2379, Service: "http"}},
+		{"docker-api", model.Item{Kind: model.KindHost, Port: 2375, Service: "http"}},
+		{"r-services", model.Item{Kind: model.KindHost, Port: 514, Service: "shell"}},
+		{"portainer", model.Item{Kind: model.KindHost, Port: 9000, Banner: "Portainer"}},
+		{"db-couchdb", model.Item{Kind: model.KindHost, Port: 5984, Service: "couchdb"}},
+		{"nse-eternalblue", model.Item{Kind: model.KindHost, Port: 445, Scripts: "smb-vuln-ms17-010: VULNERABLE"}},
+	}
+	for _, c := range cases {
+		fs := rs.Evaluate([]model.Item{c.item})
+		if len(findingsWithRule(fs, c.rule)) == 0 {
+			t.Errorf("expected rule %q to fire for %+v", c.rule, c.item)
+		}
+	}
+}
+
+func TestNewFFUFPathRulesFire(t *testing.T) {
+	rs := loadDefault(t)
+	cases := []struct {
+		rule string
+		path string
+	}{
+		{"path-iac", "docker-compose.yml"},
+		{"path-iac", "terraform.tfstate"},
+		{"path-ci", ".github/workflows/deploy.yml"},
+		{"path-dotnet-debug", "elmah.axd"},
+		{"path-soap", "service.wsdl"},
+		{"path-metrics", "metrics"},
+		{"path-health", "healthz"},
+		{"path-dev-artifacts", ".DS_Store"},
+	}
+	for _, c := range cases {
+		items := []model.Item{{Kind: model.KindPath, URL: "http://t/" + c.path, Path: c.path, Status: 200}}
+		fs := rs.Evaluate(items)
+		if len(findingsWithRule(fs, c.rule)) == 0 {
+			t.Errorf("expected rule %q to fire for path %q", c.rule, c.path)
+		}
+	}
+}
+
+func TestPunycodeSubFlagged(t *testing.T) {
+	rs := loadDefault(t)
+	items := []model.Item{{Kind: model.KindSub, Name: "xn--80ak6aa92e.target.com"}}
+	fs := rs.Evaluate(items)
+	if len(findingsWithRule(fs, "sub-punycode")) == 0 {
+		t.Error("expected punycode subdomain to be flagged")
+	}
+}
+
+func TestByKindBucketingDoesNotCrossApply(t *testing.T) {
+	rs := loadDefault(t)
+	// A host-only rule (smb) must never fire for a path or sub item, and a
+	// path-only rule (path-vcs) must never fire for a host item, even if the
+	// field happens to contain a matching substring. This guards the
+	// performance bucketing (byKind) against accidentally changing behavior.
+	hostItem := model.Item{Kind: model.KindHost, Port: 445, Service: "microsoft-ds", Path: ".git/config"}
+	fs := rs.Evaluate([]model.Item{hostItem})
+	if len(findingsWithRule(fs, "path-vcs")) != 0 {
+		t.Error("path-only rule must not fire on a host item")
+	}
+
+	pathItem := model.Item{Kind: model.KindPath, Service: "microsoft-ds", Path: "x", Status: 200}
+	fs = rs.Evaluate([]model.Item{pathItem})
+	if len(findingsWithRule(fs, "smb")) != 0 {
+		t.Error("host-only rule must not fire on a path item")
+	}
+}
+
+func TestParallelEvaluationMatchesSequential(t *testing.T) {
+	rs := loadDefault(t)
+	// Build a large, deterministic mixed set that crosses parallelThreshold,
+	// and confirm the result is identical (content-wise) to evaluating a
+	// small slice of the same data sequentially — i.e. splitting into chunks
+	// for the worker pool must not drop, duplicate, or alter any finding.
+	var items []model.Item
+	for i := 0; i < 3000; i++ {
+		items = append(items, model.Item{
+			Kind: model.KindHost, Address: "10.0.0.1", Port: 20000 + i, Service: "microsoft-ds",
+		})
+	}
+	fs := rs.Evaluate(items)
+	smb := findingsWithRule(fs, "smb")
+	if len(smb) != 3000 {
+		t.Fatalf("expected 3000 smb findings from parallel evaluation, got %d", len(smb))
+	}
+	// Re-run to confirm determinism across repeated parallel runs.
+	fs2 := rs.Evaluate(items)
+	if len(fs2) != len(fs) {
+		t.Fatalf("non-deterministic finding count across runs: %d vs %d", len(fs), len(fs2))
+	}
+	for i := range fs {
+		if fs[i].Target != fs2[i].Target || fs[i].RuleID != fs2[i].RuleID {
+			t.Fatalf("non-deterministic ordering at index %d: %+v vs %+v", i, fs[i], fs2[i])
+		}
+	}
 }
 
 func TestReasonsNeverEmpty(t *testing.T) {

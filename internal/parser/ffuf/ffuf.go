@@ -6,10 +6,19 @@
 // object keyed by the fuzz keyword (usually FUZZ), so we tolerate either a
 // string or an object there.
 //
-// Robustness: truncated ffuf output (e.g. the process was killed mid-write)
-// yields invalid JSON. Rather than return nothing, we fall back to a
-// line/record salvage pass that recovers whole result objects that were fully
-// written before truncation.
+// Parsing is a single streaming pass over the input using encoding/json's
+// token-based Decoder, rather than buffering the whole file and attempting a
+// one-shot Unmarshal. This matters for two reasons:
+//
+//  1. Efficiency: a large wordlist run can produce a multi-hundred-MB JSON
+//     file. Decoder reads incrementally from the source, so the clean/common
+//     case never holds the entire file as one contiguous byte slice in memory
+//     alongside the parsed structure — unlike io.ReadAll + json.Unmarshal.
+//  2. Robustness: truncated ffuf output (e.g. the process was killed
+//     mid-write) yields invalid JSON. Streaming decode naturally recovers
+//     every complete result record decoded before the cut, with no separate
+//     hand-rolled byte-scanning fallback needed — the same single pass
+//     handles both the clean and the truncated case.
 package ffuf
 
 import (
@@ -21,10 +30,6 @@ import (
 
 	"ptk/internal/model"
 )
-
-type ffufFile struct {
-	Results []result `json:"results"`
-}
 
 type result struct {
 	Input            inputField `json:"input"`
@@ -85,29 +90,93 @@ func ParseFile(path string) (model.ParseResult, error) {
 // Parse consumes an ffuf JSON stream, degrading gracefully on truncation.
 func Parse(r io.Reader) model.ParseResult {
 	var res model.ParseResult
-	data, err := io.ReadAll(r)
-	if err != nil {
-		res.Warnings = append(res.Warnings, fmt.Sprintf("read error: %v", err))
-		return res
-	}
+	items, truncated, foundResults, err := streamDecode(r)
+	res.Items = items
 
-	var ff ffufFile
-	if err := json.Unmarshal(data, &ff); err == nil {
-		for _, r := range ff.Results {
-			res.Items = append(res.Items, resultToItem(r))
-		}
-		if len(ff.Results) == 0 {
-			res.Warnings = append(res.Warnings, "ffuf JSON parsed but contained no results")
-		}
-		return res
+	switch {
+	case err != nil:
+		res.Warnings = append(res.Warnings, fmt.Sprintf("ffuf JSON could not be parsed: %v", err))
+	case !foundResults:
+		res.Warnings = append(res.Warnings, `no "results" array found — is this ffuf JSON (-of json) output?`)
+	case truncated:
+		res.Warnings = append(res.Warnings,
+			fmt.Sprintf("ffuf JSON was truncated/malformed; recovered %d complete result record(s) before the cut", len(items)))
+	case len(items) == 0:
+		res.Warnings = append(res.Warnings, "ffuf JSON parsed but contained no results")
 	}
-
-	// Clean parse failed — attempt salvage of whole result objects.
-	salvaged, n := salvage(data)
-	res.Items = append(res.Items, salvaged...)
-	res.Warnings = append(res.Warnings,
-		fmt.Sprintf("ffuf JSON was malformed/truncated; salvaged %d complete result record(s)", n))
 	return res
+}
+
+// streamDecode walks the top-level JSON object looking for the "results" key,
+// decoding each array element individually. Sibling keys (commandline, time,
+// config, ...) are skipped generically without being fully typed. Once the
+// results array has been consumed (cleanly or not), parsing stops — a
+// truncation AFTER a complete results array (e.g. in a trailing "config"
+// block) must not be reported as lost findings, since nothing we care about
+// was actually dropped.
+//
+// truncated distinguishes "the results array did not close cleanly" (some
+// element failed to decode, or EOF arrived before the closing bracket) from a
+// normal, complete parse — including the subtle case where the stream ends
+// exactly on a trailing comma with no closing bracket at all: in that case
+// json.Decoder.More() itself can't tell, so after an apparently-clean loop
+// exit we explicitly try to consume the closing ']' and treat failure to do
+// so as truncation too.
+func streamDecode(r io.Reader) (items []model.Item, truncated bool, foundResults bool, err error) {
+	dec := json.NewDecoder(r)
+
+	tok, e := dec.Token()
+	if e != nil {
+		return nil, false, false, e
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil, false, false, fmt.Errorf("expected a JSON object at the top level")
+	}
+
+	for dec.More() {
+		keyTok, e := dec.Token()
+		if e != nil {
+			return items, true, foundResults, nil
+		}
+		key, _ := keyTok.(string)
+		if key != "results" {
+			var discard any
+			if e := dec.Decode(&discard); e != nil {
+				return items, true, foundResults, nil
+			}
+			continue
+		}
+
+		foundResults = true
+		arrTok, e := dec.Token()
+		if e != nil {
+			return items, true, true, nil
+		}
+		if d, ok := arrTok.(json.Delim); !ok || d != '[' {
+			return items, true, true, nil
+		}
+
+		for dec.More() {
+			var rr result
+			if e := dec.Decode(&rr); e != nil {
+				return items, true, true, nil
+			}
+			items = append(items, resultToItem(rr))
+		}
+		// dec.More() returning false is ambiguous: it also returns false on a
+		// read error/EOF while peeking (e.g. the stream ends right after a
+		// trailing comma, before any closing bracket was ever written).
+		// Confirm the array really closed by consuming the ']' explicitly.
+		closeTok, e := dec.Token()
+		if e != nil {
+			return items, true, true, nil
+		}
+		if d, ok := closeTok.(json.Delim); !ok || d != ']' {
+			return items, true, true, nil
+		}
+		return items, false, true, nil
+	}
+	return items, false, foundResults, nil
 }
 
 func resultToItem(r result) model.Item {
@@ -129,69 +198,15 @@ func resultToItem(r result) model.Item {
 	return it
 }
 
-// salvage scans a truncated results array and extracts every balanced {...}
-// object inside it, decoding each independently. This recovers all records
-// written before the truncation point.
-func salvage(data []byte) ([]model.Item, int) {
-	idx := bytes.Index(data, []byte(`"results"`))
-	if idx < 0 {
-		return nil, 0
-	}
-	// Advance to the opening '[' of the results array.
-	start := bytes.IndexByte(data[idx:], '[')
-	if start < 0 {
-		return nil, 0
-	}
-	buf := data[idx+start+1:]
-
-	var items []model.Item
-	depth := 0
-	objStart := -1
-	inStr := false
-	esc := false
-	for i := 0; i < len(buf); i++ {
-		c := buf[i]
-		if inStr {
-			switch {
-			case esc:
-				esc = false
-			case c == '\\':
-				esc = true
-			case c == '"':
-				inStr = false
-			}
-			continue
-		}
-		switch c {
-		case '"':
-			inStr = true
-		case '{':
-			if depth == 0 {
-				objStart = i
-			}
-			depth++
-		case '}':
-			depth--
-			if depth == 0 && objStart >= 0 {
-				var r result
-				if err := json.Unmarshal(buf[objStart:i+1], &r); err == nil {
-					items = append(items, resultToItem(r))
-				}
-				objStart = -1
-			}
-		case ']':
-			if depth == 0 {
-				return items, len(items)
-			}
-		}
-	}
-	return items, len(items)
-}
-
 // Baseline computes the most common response length ("noise floor") across a
 // set of path items. Reporters/rules use it to flag size outliers — the entries
 // that deviate from the sea of identical 404/200-wildcard responses are the
 // ones worth a look. Returns the modal length and how many items shared it.
+//
+// NOTE: this is a global (all-statuses) baseline, kept as a general-purpose
+// utility. The rule engine itself computes a more precise PER-STATUS-CODE
+// baseline internally (see internal/rules) since mixing statuses into one
+// baseline is prone to false positives/negatives.
 func Baseline(items []model.Item) (length int, count int) {
 	freq := map[int]int{}
 	for _, it := range items {

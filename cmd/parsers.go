@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"ptk/internal/model"
 	"ptk/internal/parser/ffuf"
@@ -72,10 +73,6 @@ var allCmd = &cobra.Command{
 			return fmt.Errorf("reading folder: %w", err)
 		}
 
-		var allItems []model.Item
-		var allWarnings, sources []string
-		matched := 0
-
 		// Stable order for deterministic reports.
 		names := make([]string, 0, len(entries))
 		for _, e := range entries {
@@ -85,15 +82,39 @@ var allCmd = &cobra.Command{
 		}
 		sort.Strings(names)
 
-		for _, name := range names {
-			path := filepath.Join(dir, name)
-			res, ok := parseByKind(path)
-			if !ok {
+		// Parse each candidate file independently and in parallel — parsing
+		// is I/O-plus-CPU work with no shared state between files, so this
+		// shortens wall-clock time on folders with several large inputs
+		// (common for `all`: an nmap XML, an ffuf JSON, and a subs list at
+		// once). Results are collected into a fixed, index-aligned slice so
+		// the final ordering stays deterministic regardless of which
+		// goroutine finishes first.
+		type outcome struct {
+			res model.ParseResult
+			ok  bool
+		}
+		outcomes := make([]outcome, len(names))
+		var wg sync.WaitGroup
+		for i, name := range names {
+			wg.Add(1)
+			go func(i int, path string) {
+				defer wg.Done()
+				res, ok := parseByKind(path)
+				outcomes[i] = outcome{res: res, ok: ok}
+			}(i, filepath.Join(dir, name))
+		}
+		wg.Wait()
+
+		var allItems []model.Item
+		var allWarnings, sources []string
+		matched := 0
+		for i, name := range names {
+			if !outcomes[i].ok {
 				continue
 			}
 			matched++
-			allItems = append(allItems, res.Items...)
-			for _, w := range res.Warnings {
+			allItems = append(allItems, outcomes[i].res.Items...)
+			for _, w := range outcomes[i].res.Warnings {
 				allWarnings = append(allWarnings, fmt.Sprintf("%s: %s", name, w))
 			}
 			sources = append(sources, name)
