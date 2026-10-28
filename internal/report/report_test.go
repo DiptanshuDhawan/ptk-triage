@@ -57,53 +57,77 @@ func TestColorOutputHasExpectedBadgeCodes(t *testing.T) {
 	}
 }
 
-func TestSeverityTiersAppearInOrder(t *testing.T) {
+func TestToolSectionsAppearInOrder(t *testing.T) {
 	var buf bytes.Buffer
 	_ = Render(&buf, sampleFindings(), nil, nil, nil, Options{NoColor: true, Width: DefaultWidth})
 	out := buf.String()
 
-	highIdx := strings.Index(out, "HIGH — act now")
-	medIdx := strings.Index(out, "MEDIUM — worth a look")
-	lowIdx := strings.Index(out, "LOW — note for later")
-	if highIdx < 0 || medIdx < 0 || lowIdx < 0 {
-		t.Fatalf("missing a section banner; output:\n%s", out)
+	nmapIdx := strings.Index(out, "nmap · hosts & services")
+	ffufIdx := strings.Index(out, "ffuf · discovered content")
+	subsIdx := strings.Index(out, "subdomains · enumerated names")
+	if nmapIdx < 0 || ffufIdx < 0 || subsIdx < 0 {
+		t.Fatalf("missing a tool section banner; output:\n%s", out)
 	}
-	if !(highIdx < medIdx && medIdx < lowIdx) {
-		t.Error("severity section banners must appear HIGH, then MED, then LOW")
+	if !(nmapIdx < ffufIdx && ffufIdx < subsIdx) {
+		t.Error("tool sections must appear nmap, then ffuf, then subdomains")
 	}
-	// No findings were INFO-severity, so that banner must not appear at all.
-	if strings.Contains(out, "INFO — context only (") {
-		// The legend line mentions "INFO context only" without a count — only
-		// the section BANNER (with a parenthesized count) should be absent.
-		if strings.Contains(out, "╣ INFO") {
-			t.Error("INFO section banner should not render when there are no INFO findings")
+}
+
+func TestToolSectionOmittedWhenToolHasNoFindings(t *testing.T) {
+	// An ffuf-only result set must print the ffuf section and nothing for the
+	// other two tools.
+	fs := []model.Finding{
+		{Kind: model.KindPath, Target: "http://t/.git", Severity: model.SevHigh, SevLabel: "HIGH", RuleID: "path-git", Reason: ".git exposed"},
+	}
+	var buf bytes.Buffer
+	_ = Render(&buf, fs, nil, nil, nil, Options{NoColor: true, Width: DefaultWidth})
+	out := buf.String()
+	if !strings.Contains(out, "ffuf · discovered content") {
+		t.Errorf("expected the ffuf section, got:\n%s", out)
+	}
+	if strings.Contains(out, "nmap · hosts & services") || strings.Contains(out, "subdomains · enumerated names") {
+		t.Error("sections for tools with no findings must not be printed")
+	}
+}
+
+func TestNativeColumnHeadersPresent(t *testing.T) {
+	var buf bytes.Buffer
+	_ = Render(&buf, sampleFindings(), nil, nil, nil, Options{NoColor: true, Width: DefaultWidth})
+	out := buf.String()
+	// Each tool section carries its own native-style column header.
+	for _, want := range []string{"HOST:PORT", "SERVICE", "STATUS", "WORDS", "SUBDOMAIN", "RESOLVES TO"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected native column header %q in output:\n%s", want, out)
 		}
 	}
 }
 
-func TestMixedKindTierGetsSubHeaders(t *testing.T) {
+func TestSeverityOrderedWithinToolSection(t *testing.T) {
+	// Within one tool's section the higher-severity row must come first, so the
+	// must-check item sits at the top. This mirrors production, where Evaluate
+	// sorts findings HIGH-first before they reach the renderer.
 	fs := []model.Finding{
-		{Kind: model.KindHost, Target: "10.0.0.1:445", Severity: model.SevHigh, SevLabel: "HIGH", RuleID: "smb", Reason: "x"},
-		{Kind: model.KindPath, Target: "http://t/.env", Severity: model.SevHigh, SevLabel: "HIGH", RuleID: "path-env", Reason: "y"},
+		{Kind: model.KindHost, Target: "10.0.0.1:135", Severity: model.SevMedium, SevLabel: "MED", RuleID: "msrpc", Reason: "medium thing"},
+		{Kind: model.KindHost, Target: "10.0.0.1:445", Severity: model.SevHigh, SevLabel: "HIGH", RuleID: "smb", Reason: "high thing"},
 	}
+	model.SortFindings(fs)
 	var buf bytes.Buffer
 	_ = Render(&buf, fs, nil, nil, nil, Options{NoColor: true, Width: DefaultWidth})
 	out := buf.String()
-	if !strings.Contains(out, "── hosts") || !strings.Contains(out, "── paths") {
-		t.Errorf("expected both kind sub-headers in a mixed-kind tier, got:\n%s", out)
+	hi := strings.Index(out, "high thing")
+	med := strings.Index(out, "medium thing")
+	if hi < 0 || med < 0 || hi > med {
+		t.Errorf("HIGH finding must render before MED within a tool section; out:\n%s", out)
 	}
 }
 
-func TestSingleKindTierHasNoSubHeader(t *testing.T) {
-	fs := []model.Finding{
-		{Kind: model.KindHost, Target: "10.0.0.1:445", Severity: model.SevHigh, SevLabel: "HIGH", RuleID: "smb", Reason: "x"},
-		{Kind: model.KindHost, Target: "10.0.0.1:139", Severity: model.SevHigh, SevLabel: "HIGH", RuleID: "smb", Reason: "y"},
-	}
+func TestReasonLineRendersUnderFinding(t *testing.T) {
 	var buf bytes.Buffer
-	_ = Render(&buf, fs, nil, nil, nil, Options{NoColor: true, Width: DefaultWidth})
+	_ = Render(&buf, sampleFindings(), nil, nil, nil, Options{NoColor: true, Width: DefaultWidth})
 	out := buf.String()
-	if strings.Contains(out, "── hosts") {
-		t.Error("a single-kind tier must not print a redundant kind sub-header")
+	// The "why it matters" note is rendered on its own connector line.
+	if !strings.Contains(out, "└─ SMB exposed") {
+		t.Errorf("expected a connector-prefixed reason line, got:\n%s", out)
 	}
 }
 

@@ -46,11 +46,16 @@ type ResolvedSub struct {
 }
 
 // CSVLine renders the result as a line the subs parser understands:
-// "name,ip,status,cname" with fields omitted when unknown. The CNAME is kept
-// for both resolved and unresolved hosts: resolved third-party CNAMEs are useful
-// low-severity watch-items, while CNAME+no-IP is the HIGH dangling/takeover
-// signal. The subs parser is order-independent and tolerant of empty fields,
-// so this round-trips cleanly through `triage subs` / `triage all`.
+// "name,ip,status,cname" with fields omitted when unknown. The subs parser is
+// order-independent and tolerant of empty fields, so this round-trips cleanly
+// through `triage subs` / `triage all`.
+//
+// The CNAME is emitted only when the host did NOT resolve to an A record — that
+// is the HIGH dangling-CNAME / subdomain-takeover signal the subs rule keys on
+// (it fires on CNAME-with-no-IP). For a host that *does* resolve, a benign
+// third-party CNAME (CDN, load balancer, SaaS front) is noise; worse, carrying
+// it would suppress the "resolved-but-no-web" low finding, which only fires
+// when the CNAME field is empty — so we deliberately drop it.
 func (r ResolvedSub) CSVLine() string {
 	ip := ""
 	if len(r.Addrs) > 0 {
@@ -60,7 +65,11 @@ func (r ResolvedSub) CSVLine() string {
 	if r.Status > 0 {
 		status = fmt.Sprintf("%d", r.Status)
 	}
-	return strings.Join([]string{r.Name, ip, status, r.CNAME}, ",")
+	cname := ""
+	if !r.Resolved {
+		cname = r.CNAME
+	}
+	return strings.Join([]string{r.Name, ip, status, cname}, ",")
 }
 
 // Enrich resolves and (optionally) probes a list of subdomain names

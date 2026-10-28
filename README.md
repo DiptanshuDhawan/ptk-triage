@@ -17,22 +17,29 @@ sources: testdata/real_nmap.xml
   [ HIGH 8 ]  [ MED 2 ]  [ LOW 3 ]  [ INFO 1 ]
   HIGH act now  ·  MED worth a look this scan  ·  LOW note for later  ·  INFO context only
 
-╔══╣ HIGH — act now (8) ╠══════════════════════════════════════════════════════════════════════════╗
+╔══╣ nmap · hosts & services — 14 findings ╠═══════════════════════════════════════════════════════╗
 
- [ HIGH ]  10.129.42.190:139   SMB exposed — enumerate shares, check null/anonymous session, signing, and known RCE (MS17-010 etc.)
- [ HIGH ]  10.129.42.190:3268  LDAP exposed — enumerate the directory (anonymous bind?), extract users/groups/policy
- [ HIGH ]  10.129.42.190:389   LDAP exposed — enumerate the directory (anonymous bind?), extract users/groups/policy
- [ HIGH ]  10.129.42.190:445   SMB exposed — enumerate shares, check null/anonymous session, signing, and known RCE (MS17-010 etc.)
- [ HIGH ]  10.129.42.190:464   Kerberos present — Domain Controller likely; try AS-REP roasting and user enumeration
- [ HIGH ]  10.129.42.190:5985  WinRM port open — remote PowerShell management interface; prime target with valid creds
- [ HIGH ]  10.129.42.190:636   LDAP exposed — enumerate the directory (anonymous bind?), extract users/groups/policy
- [ HIGH ]  10.129.42.190:88    Kerberos present — Domain Controller likely; try AS-REP roasting and user enumeration
+           HOST:PORT          SERVICE       VERSION / BANNER
+ [ HIGH ]  10.129.42.190:445  microsoft-ds
+           └─ SMB exposed — enumerate shares, check null/anonymous session, signing, and known RCE (MS17-010 etc.)
+ [ HIGH ]  10.129.42.190:88   kerberos-sec  Microsoft Windows Kerberos
+           └─ Kerberos present — Domain Controller likely; try AS-REP roasting and user enumeration
+ [ HIGH ]  10.129.42.190:5985 http          Microsoft HTTPAPI httpd 2.0
+           └─ WinRM port open — remote PowerShell management interface; prime target with valid creds
+ [ MED  ]  10.129.42.190:445  microsoft-ds
+           └─ SMB signing not required — enables NTLM relay attacks
+ [ LOW  ]  10.129.42.190:123  ntp
+           └─ Port 123 open but service only guessed from port number (not probed) — confirm manually
 
- ⋮  MEDIUM / LOW / INFO sections follow, each its own banner — see the demo below for the full run
+  ⋮  one section per tool — ffuf paths (STATUS / SIZE / WORDS / URL) and
+     subdomains (SUBDOMAIN / RESOLVES TO / STATE) print their own native
+     tables below; see the demos for a full run
 ```
 
-(colors render in a real terminal — severity tags are solid background badges, section
-banners fill the terminal width, like a typical enumeration-script report)
+(colors render in a real terminal — severity tags are solid background badges,
+HTTP status codes are tinted by class, and each tool's findings are grouped
+into their own full-width banner section, like a typical enumeration-script
+report)
 
 ---
 
@@ -180,14 +187,15 @@ sources: old=subs_old.csv, new=subs_new.csv
   [ HIGH 1 ]  [ MED 0 ]  [ LOW 2 ]  [ INFO 0 ]
   HIGH act now  ·  MED worth a look this scan  ·  LOW note for later  ·  INFO context only
 
-╔══╣ HIGH — act now (1) ╠══════════════════════════════════════════════════════════════════════════╗
+╔══╣ subdomains · enumerated names — 3 findings ╠══════════════════════════════════════════════════╗
 
- [ HIGH ]  shop.target.com   ~ CNAME became dangling (-> shop.target.com.herokuapp.com) — NEW possible subdomain takeover
-
-╔══╣ LOW — note for later (2) ╠════════════════════════════════════════════════════════════════════╗
-
- [ LOW  ]  app.target.com    ~ CNAME now resolves (203.0.113.30) — previously dangling, takeover window likely closed
- [ LOW  ]  promo.target.com  + new subdomain
+           SUBDOMAIN          RESOLVES TO                       STATE
+ [ HIGH ]  shop.target.com    -> shop.target.com.herokuapp.com  dangling
+           └─ ~ CNAME became dangling (-> shop.target.com.herokuapp.com) — NEW possible subdomain takeover
+ [ LOW  ]  app.target.com     203.0.113.30                      http 200
+           └─ ~ CNAME now resolves (203.0.113.30) — previously dangling, takeover window likely closed
+ [ LOW  ]  promo.target.com   -> promo.target.com.herokuapp.com dangling
+           └─ + new subdomain
 ```
 
 A CNAME that *became* dangling is flagged **HIGH** (a fresh takeover window);
