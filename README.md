@@ -11,15 +11,28 @@ Built for HTB CPTS labs and real engagements: single static Go binary, fast,
 and designed to be run after every scan.
 
 ```
-ptk triage report
-findings: HIGH 7  MED 5  LOW 6  INFO 0
+ptk triage  ·  recon findings, ranked
+sources: testdata/real_nmap.xml
 
-[HIGH]   10.10.10.5:445    SMB exposed — enumerate shares, check null/anonymous session, signing, and known RCE (MS17-010 etc.)
-[HIGH]   10.10.10.5:88     Kerberos present — Domain Controller likely; try AS-REP roasting and user enumeration
-[HIGH]   dev.target.com    Dangling CNAME -> dev.s3.amazonaws.com — possible subdomain takeover
-[MED]    10.10.10.5:5985   HTTP service on non-standard port 5985 — worth manual inspection
-[LOW]    10.10.10.5:22     Older OpenSSH (OpenSSH 7.2) — enumerate users (pre-7.7 CVE-2018-15473) and check version CVEs
+  [ HIGH 8 ]  [ MED 2 ]  [ LOW 3 ]  [ INFO 1 ]
+  HIGH act now  ·  MED worth a look this scan  ·  LOW note for later  ·  INFO context only
+
+╔══╣ HIGH — act now (8) ╠══════════════════════════════════════════════════════════════════════════╗
+
+ [ HIGH ]  10.129.42.190:139   SMB exposed — enumerate shares, check null/anonymous session, signing, and known RCE (MS17-010 etc.)
+ [ HIGH ]  10.129.42.190:3268  LDAP exposed — enumerate the directory (anonymous bind?), extract users/groups/policy
+ [ HIGH ]  10.129.42.190:389   LDAP exposed — enumerate the directory (anonymous bind?), extract users/groups/policy
+ [ HIGH ]  10.129.42.190:445   SMB exposed — enumerate shares, check null/anonymous session, signing, and known RCE (MS17-010 etc.)
+ [ HIGH ]  10.129.42.190:464   Kerberos present — Domain Controller likely; try AS-REP roasting and user enumeration
+ [ HIGH ]  10.129.42.190:5985  WinRM port open — remote PowerShell management interface; prime target with valid creds
+ [ HIGH ]  10.129.42.190:636   LDAP exposed — enumerate the directory (anonymous bind?), extract users/groups/policy
+ [ HIGH ]  10.129.42.190:88    Kerberos present — Domain Controller likely; try AS-REP roasting and user enumeration
+
+ ⋮  MEDIUM / LOW / INFO sections follow, each its own banner — see the demo below for the full run
 ```
+
+(colors render in a real terminal — severity tags are solid background badges, section
+banners fill the terminal width, like a typical enumeration-script report)
 
 ---
 
@@ -107,12 +120,22 @@ ptk triage diff ./scan-day1 ./scan-day2      # folders also work
 Diff understands meaningful transitions, not just text changes:
 
 ```
-diff: 1 added, 1 changed, 9 removed
+diff: 1 added, 2 changed, 0 removed
 
-[HIGH]   shop.target.com   ~ CNAME became dangling (-> shop.herokuapp.com) — NEW possible subdomain takeover
-[MED]    10.10.10.5:1433   + new open port — ms-sql-s Microsoft SQL Server 2019
-[LOW]    10.10.10.5:22     ~ banner "OpenSSH 7.2p2" -> "OpenSSH 9.6p1"
-[INFO]   10.10.10.5:3389   - port no longer open — was ms-wbt-server
+ptk triage  ·  recon findings, ranked
+sources: old=subs_old.csv, new=subs_new.csv
+
+  [ HIGH 1 ]  [ MED 0 ]  [ LOW 2 ]  [ INFO 0 ]
+  HIGH act now  ·  MED worth a look this scan  ·  LOW note for later  ·  INFO context only
+
+╔══╣ HIGH — act now (1) ╠══════════════════════════════════════════════════════════════════════════╗
+
+ [ HIGH ]  shop.target.com   ~ CNAME became dangling (-> shop.target.com.herokuapp.com) — NEW possible subdomain takeover
+
+╔══╣ LOW — note for later (2) ╠════════════════════════════════════════════════════════════════════╗
+
+ [ LOW  ]  app.target.com    ~ CNAME now resolves (203.0.113.30) — previously dangling, takeover window likely closed
+ [ LOW  ]  promo.target.com  + new subdomain
 ```
 
 A CNAME that *became* dangling is flagged **HIGH** (a fresh takeover window);
