@@ -64,6 +64,8 @@ ptk triage ffuf <file.json>     Triage ffuf JSON (-of json) output
 ptk triage subs <file>          Triage subdomain output (CSV / list / amass / subfinder)
 ptk triage all <folder>         Run all three over a folder, unified report
 ptk triage diff <old> <new>     Show only what changed between two scans
+ptk triage scan <target>        Run subfinder/nmap/ffuf FOR you, then triage the output
+ptk triage doctor               Report which external tools are installed
 ptk triage rules [--dump]       Inspect / export the ruleset
 ```
 
@@ -94,6 +96,56 @@ ptk triage all ./target-10.10.10.5
 `all` auto-detects file types by extension and content (`.xml` → nmap,
 `.json` → ffuf, `.txt`/`.csv`/`list` or names containing `sub`/`amass`/
 `subfinder` → subdomains).
+
+### Running the scans for you (`scan`)
+
+`scan` drives the real recon tools and triages what they produce, so you can
+go from a bare target to a ranked report in one command. It shells out to the
+tools you already use — it does **not** reimplement them — and writes their
+native output into an engagement folder that `triage all` and `triage diff`
+then work on exactly as if you'd collected the files by hand.
+
+```bash
+ptk triage scan target.com                 # subdomains → resolve → nmap → ffuf → report
+ptk triage scan 10.10.10.5                 # IP: nmap → ffuf → report (subs skipped)
+ptk triage scan 10.10.10.0/24 --skip-ffuf  # CIDR: scan the range (prompts to confirm)
+ptk triage scan target.com --dry-run       # print the exact plan, run nothing
+```
+
+What it does, by target kind:
+
+| Target | Stages |
+|--------|--------|
+| **domain** | `subfinder` (+ `amass`/`assetfinder` if present) → native DNS resolve + optional HTTP probe → `nmap` the resolved IPs → `ffuf` every discovered HTTP/S service |
+| **IP** | `nmap` → `ffuf` the discovered web services |
+| **CIDR** | `nmap` the range → `ffuf` the discovered web services (subdomain enum skipped) |
+
+Key behaviors:
+
+- **Degrades gracefully.** A missing tool is a skipped stage with a warning,
+  never a crash — same philosophy as a truncated input file. Run
+  `ptk triage doctor` to see what's installed and how to get the rest.
+- **Data flows between stages.** Resolved subdomain IPs feed nmap; the HTTP/S
+  services nmap finds feed ffuf (RPC-over-HTTP and the WinRM HTTPAPI stack are
+  excluded, so it won't fuzz non-web ports).
+- **DNS resolution and HTTP probing are native Go** — no extra tool needed, and
+  a CNAME with no A record is captured as exactly the dangling-takeover signal
+  the subdomain rules key on.
+- **Nmap default is a TCP connect scan** (`-sT -sV -sC --top-ports 1000`) so it
+  works without root/Administrator; `-sC` feeds the engine's NSE-output rules.
+  Override everything with `--nmap-args "-sS -p-"` when you're elevated.
+- **Artifacts land in `-o <folder>`** (default `./ptk-<target>-<timestamp>/`),
+  with raw tool logs under `raw/`. Because output is file-based,
+  `ptk triage diff <folder1> <folder2>` compares two runs for free.
+- **Ctrl+C** cancels running tools and still triages whatever was gathered.
+
+Common flags: `--wordlist <path>` (ffuf; auto-detects common SecLists/dirb
+locations otherwise), `--skip-subs` / `--skip-nmap` / `--skip-ffuf`,
+`--nmap-args` / `--ffuf-args` (passthrough), `--max-ffuf N`, `--dry-run`,
+`--yes` (skip the CIDR confirmation).
+
+> **Authorized use only.** `scan` performs active scanning and fuzzing. Point it
+> only at systems you have permission to test.
 
 ### Filters and output modes
 
@@ -337,18 +389,21 @@ tool, coverage warnings are always printed (even under `--only-high`).
 
 ```
 main.go                     entry point
-cmd/                        cobra subcommands (nmap, ffuf, subs, all, diff, rules)
+cmd/                        cobra subcommands (nmap, ffuf, subs, all, diff, scan, doctor, rules)
 internal/
   model/                    normalized Item / Finding types (source-agnostic)
   parser/nmap|ffuf|subs/    raw output -> []Item   (+ truncation salvage)
   rules/                    the rule engine + embedded default_rules.yaml
   report/                   findings -> colored terminal / JSON
   diff/                     two scans -> ranked delta
+  orchestrator/             `scan`: drive subfinder/nmap/ffuf -> engagement folder
 testdata/                   sample fixtures (nmap XML, ffuf JSON, subs CSV)
 ```
 
 The layering is deliberate: **parser → rule engine → presentation**. Parsers and
-the engine stay stable while you extend the rules.
+the engine stay stable while you extend the rules. The orchestrator sits on top,
+driving external tools and then feeding their output straight into that same
+pipeline.
 
 ## Tests
 

@@ -19,6 +19,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"regexp"
 	"strconv"
@@ -32,7 +33,6 @@ var (
 	// dots, with a final alphabetic TLD of 2+ chars. Good enough to tell a
 	// hostname apart from noise/log lines.
 	reHost = regexp.MustCompile(`^(?:[a-zA-Z0-9_](?:[a-zA-Z0-9_-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$`)
-	reIPv4 = regexp.MustCompile(`^\d{1,3}(?:\.\d{1,3}){3}$`)
 	// amass arrow form: "<name> (FQDN) --> <relation> --> <target> (TYPE)"
 	reAmassArrow = regexp.MustCompile(`^(\S+)\s+\((?:FQDN|[^)]+)\)\s+-->\s+(\S+)\s+-->\s+(\S+)`)
 )
@@ -91,7 +91,7 @@ func parseLine(line string) (model.Item, bool) {
 		target := strings.TrimSuffix(m[3], ".")
 		it := model.Item{Kind: model.KindSub, Name: name, Extra: map[string]string{}}
 		switch {
-		case reIPv4.MatchString(target):
+		case net.ParseIP(target) != nil:
 			it.Address = target
 			it.Resolved = true
 		case strings.Contains(rel, "cname"):
@@ -121,8 +121,8 @@ func parseLine(line string) (model.Item, bool) {
 		switch {
 		case f == "":
 			continue
-		case reIPv4.MatchString(f):
-			it.Address = f
+		case net.ParseIP(strings.Trim(f, "[]")) != nil:
+			it.Address = strings.Trim(f, "[]")
 			it.Resolved = true
 		case isStatus(f):
 			code, _ := strconv.Atoi(f)

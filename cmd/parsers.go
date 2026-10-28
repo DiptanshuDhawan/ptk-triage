@@ -68,61 +68,63 @@ var allCmd = &cobra.Command{
 		if len(args) == 1 {
 			dir = args[0]
 		}
-		entries, err := os.ReadDir(dir)
+		items, warnings, sources, matched, err := collectFolder(dir)
 		if err != nil {
-			return fmt.Errorf("reading folder: %w", err)
+			return err
 		}
-
-		// Stable order for deterministic reports.
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			if !e.IsDir() {
-				names = append(names, e.Name())
-			}
-		}
-		sort.Strings(names)
-
-		// Parse each candidate file independently and in parallel — parsing
-		// is I/O-plus-CPU work with no shared state between files, so this
-		// shortens wall-clock time on folders with several large inputs
-		// (common for `all`: an nmap XML, an ffuf JSON, and a subs list at
-		// once). Results are collected into a fixed, index-aligned slice so
-		// the final ordering stays deterministic regardless of which
-		// goroutine finishes first.
-		type outcome struct {
-			res model.ParseResult
-			ok  bool
-		}
-		outcomes := make([]outcome, len(names))
-		var wg sync.WaitGroup
-		for i, name := range names {
-			wg.Add(1)
-			go func(i int, path string) {
-				defer wg.Done()
-				res, ok := parseByKind(path)
-				outcomes[i] = outcome{res: res, ok: ok}
-			}(i, filepath.Join(dir, name))
-		}
-		wg.Wait()
-
-		var allItems []model.Item
-		var allWarnings, sources []string
-		matched := 0
-		for i, name := range names {
-			if !outcomes[i].ok {
-				continue
-			}
-			matched++
-			allItems = append(allItems, outcomes[i].res.Items...)
-			for _, w := range outcomes[i].res.Warnings {
-				allWarnings = append(allWarnings, fmt.Sprintf("%s: %s", name, w))
-			}
-			sources = append(sources, name)
-		}
-
 		if matched == 0 {
 			return fmt.Errorf("no recognizable nmap/ffuf/subdomain files found in %q", dir)
 		}
-		return emit(allItems, allWarnings, sources)
+		return emit(items, warnings, sources)
 	},
+}
+
+// collectFolder parses every recognizable file at the top level of dir (it does
+// not recurse, so a scan's raw/ provenance subfolder is naturally ignored) and
+// returns the merged items, per-file warnings, the matched source names, and
+// how many files matched. Parsing runs in parallel — each file is independent
+// I/O-plus-CPU work — with results collected index-aligned so the output stays
+// deterministic regardless of goroutine scheduling. Shared by `all` and `scan`.
+func collectFolder(dir string) (items []model.Item, warnings, sources []string, matched int, err error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, nil, nil, 0, fmt.Errorf("reading folder: %w", err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+
+	type outcome struct {
+		res model.ParseResult
+		ok  bool
+	}
+	outcomes := make([]outcome, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Add(1)
+		go func(i int, path string) {
+			defer wg.Done()
+			res, ok := parseByKind(path)
+			outcomes[i] = outcome{res: res, ok: ok}
+		}(i, filepath.Join(dir, name))
+	}
+	wg.Wait()
+
+	for i, name := range names {
+		if !outcomes[i].ok {
+			continue
+		}
+		matched++
+		items = append(items, outcomes[i].res.Items...)
+		for _, w := range outcomes[i].res.Warnings {
+			warnings = append(warnings, fmt.Sprintf("%s: %s", name, w))
+		}
+		sources = append(sources, name)
+	}
+	return items, warnings, sources, matched, nil
 }
